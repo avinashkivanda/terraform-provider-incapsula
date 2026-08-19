@@ -223,6 +223,102 @@ func TestClientAddWildcardDomainAfterPrimarySucceeds(t *testing.T) {
 	}
 }
 
+func TestClientAddDomainSucceedsOnFirstAttemptDoesNotRetry(t *testing.T) {
+	log.Print("======================== BEGIN TEST ========================")
+	log.Print("[DEBUG] Running test TestClientAddDomainSucceedsOnFirstAttemptDoesNotRetry")
+
+	apiID := "foo"
+	apiKey := "bar"
+	siteID := "111"
+	endpoint := fmt.Sprintf("/site-domain-manager/v2/sites/%s/domains", siteID)
+
+	var callCount int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		if req.URL.String() != endpoint {
+			t.Errorf("Should have hit %s endpoint. Got: %s", endpoint, req.URL.String())
+		}
+
+		atomic.AddInt32(&callCount, 1)
+		rw.WriteHeader(200)
+		rw.Write([]byte(`{
+            "id": 12,
+            "siteId": 111,
+            "domain": "a.co",
+            "mainDomain": true,
+            "managed": true,
+            "status": "BYPASSED",
+            "creationDate": 1665485465000
+}`))
+	}))
+	defer server.Close()
+
+	config := &Config{APIID: apiID, APIKey: apiKey, BaseURL: server.URL, BaseURLRev2: server.URL, BaseURLAPI: server.URL}
+	client := &Client{config: config, httpClient: &http.Client{}}
+
+	addDomainResponse, err := client.AddDomainToSite(siteID, "a.co")
+
+	if err != nil {
+		t.Errorf("Should not have received an error, got: %s", err)
+	}
+	if addDomainResponse == nil {
+		t.Fatalf("Should not have received a nil addDomainResponse instance")
+	}
+
+	verifyResponse(t, addDomainResponse)
+
+	finalCount := atomic.LoadInt32(&callCount)
+	if finalCount != 1 {
+		t.Errorf("Expected mock server to be hit exactly once on success, got %d call(s)", finalCount)
+	}
+}
+
+func TestClientAddDomainFailsImmediatelyOn400DoesNotRetry(t *testing.T) {
+	log.Print("======================== BEGIN TEST ========================")
+	log.Print("[DEBUG] Running test TestClientAddDomainFailsImmediatelyOn400DoesNotRetry")
+
+	apiID := "foo"
+	apiKey := "bar"
+	siteID := "111"
+	endpoint := fmt.Sprintf("/site-domain-manager/v2/sites/%s/domains", siteID)
+
+	var callCount int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		if req.URL.String() != endpoint {
+			t.Errorf("Should have hit %s endpoint. Got: %s", endpoint, req.URL.String())
+		}
+
+		atomic.AddInt32(&callCount, 1)
+		rw.WriteHeader(400)
+		rw.Write([]byte(`{
+			"errors": [
+				{
+				  "id": "error-1",
+				  "status": 400,
+				  "title": "Bad Request",
+				  "detail": "Domain already exists"
+				}
+			  ]
+			}`))
+	}))
+	defer server.Close()
+
+	config := &Config{APIID: apiID, APIKey: apiKey, BaseURL: server.URL, BaseURLRev2: server.URL, BaseURLAPI: server.URL}
+	client := &Client{config: config, httpClient: &http.Client{}}
+
+	_, err := client.AddDomainToSite(siteID, "a.co")
+
+	if err == nil {
+		t.Errorf("Should have received an error")
+	}
+
+	finalCount := atomic.LoadInt32(&callCount)
+	if finalCount != 1 {
+		t.Errorf("Expected mock server to be hit exactly once on a non-401 failure (no retry), got %d call(s)", finalCount)
+	}
+}
+
 func TestClientAddDomainRetriesOn401ThenSucceeds(t *testing.T) {
 	log.Print("======================== BEGIN TEST ========================")
 	log.Print("[DEBUG] Running test TestClientAddDomainRetriesOn401ThenSucceeds")
@@ -328,12 +424,12 @@ func TestClientAddDomainExhaustsRetriesOn401(t *testing.T) {
 		t.Errorf("Should have received an error after exhausting retries")
 	}
 	if addDomainResponse != nil {
-		t.Errorf("Should have received a nil addDomainResponse instance, got: %v", addDomainResponse)
+		t.Errorf("Should have received a nil addDomainResponse instance")
 	}
 
 	finalCount := atomic.LoadInt32(&callCount)
-	if int(finalCount) != addDomainMaxAttempts {
-		t.Errorf("Expected exactly %d attempts, got %d", addDomainMaxAttempts, finalCount)
+	if finalCount != int32(addDomainMaxAttempts) {
+		t.Errorf("Expected mock server to be hit exactly %d times (retries exhausted), got %d call(s)", addDomainMaxAttempts, finalCount)
 	}
 }
 
