@@ -1,8 +1,3 @@
-## 3.40.0 (Aug 5, 2026)
-
-IMPROVEMENTS:
-- Added HTTP 429 rate-limit retry with exponential backoff for API Security resources
-
 ## 3.39.1 (Aug 11, 2026)
 
 BUT FIXES:
